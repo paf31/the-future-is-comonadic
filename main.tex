@@ -1,0 +1,278 @@
+\documentclass[nocopyrightspace]{sigplanconf}
+
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{hyperref}
+
+\newcommand{\cL}{{\cal L}}
+
+\begin{document}
+
+\special{papersize=8.5in,11in}
+\setlength{\pdfpageheight}{\paperheight}
+\setlength{\pdfpagewidth}{\paperwidth}
+
+\title{Declarative UIs are the Future --- And the Future is Comonadic!}
+
+\authorinfo{Phil Freeman}
+           {}
+           {freeman.phil@gmail.com}
+
+\maketitle
+
+\begin{abstract}
+There are many techniques for the declarative specification of user interfaces, but it is not
+clear how to study their similarities and differences.
+The category-theoretic notion of a \textit{comonad} captures some essential aspects of
+these specification techniques.
+The approach presented here generalizes several known techniques, but perhaps more interestingly,
+it also generates several new comonads as we search for ways to represent existing user
+interfaces.
+\end{abstract}
+
+\keywords
+Haskell, functional programming, specification, laziness, user interfaces, comonads
+
+\section{Motivation}
+
+Here is a simple model of a user interface: a user interface consists of a type of states,
+a value of that type which represents the initial state, and a function from states to views.
+This data is captured precisely by the \texttt{Store} comonad:
+
+\begin{verbatim}
+data Store s a = Store
+  { here :: s
+  , view :: s -> a
+  }
+\end{verbatim}
+
+We can move to a new state using a helper function:
+
+\begin{verbatim}
+move :: s -> Store s a -> Store s a
+move s store = view (duplicate store) s
+\end{verbatim}
+
+\begin{figure}
+\begin{verbatim}
+class Functor w => Comonad w where
+  extract :: w a -> a
+  duplicate :: w a -> w (w a)
+
+instance Comonad (Store s) where
+  extract (Store here view) =
+    view here
+  duplicate (Store here view) =
+    Store here (\next -> Store next view)
+\end{verbatim}
+\caption{The \texttt{Comonad} type class and \texttt{Store} instance}
+\label{fig-comonad}
+\end{figure}
+
+The \texttt{duplicate} function is taken from the \texttt{Comonad} type class
+(figure \ref{fig-comonad}).
+
+A comonad represents a (lazy) unfolding of all possible future states of our user interface, as well as
+the transitions allowed between those states. The \texttt{extract} function returns
+a value for the current state, and \texttt{duplicate}
+replaces each future state with its own structure of future states.
+
+\section{Specifications from Comonads}
+
+\begin{figure}
+\begin{verbatim}
+newtype Co w a = Co
+  { runCo :: forall r. w (a -> r) -> r }
+
+instance Comonad w => Monad (Co w)
+
+select :: Co w a -> w (a -> r) -> w r
+select co w = runCo co (duplicate w)
+\end{verbatim}
+\caption{The \texttt{Co w} monad for a \texttt{Comonad w} \citep{kmett}}
+\label{fig-transition}
+\end{figure}
+
+\citet{kmett} defines a monad \texttt{Co w} which is
+constructed from a comonad \texttt{w}. For our purposes, we
+think of its actions as selecting some possible future state from a collection of
+future states described by \texttt{w}. Figure \ref{fig-transition} defines the \texttt{Co w} monad, and
+the \texttt{select} function which selects a future state.
+
+We can now define a general framework for user interfaces.
+A specification for a user interface will be described by a comonad \texttt{w} which describes
+the type of reachable next states. The \texttt{Co w} monad for that comonad will
+describe the transitions which are allowed.
+
+We can use the \texttt{Co w} monad to understand the user interfaces that we
+can describe using the comonad \texttt{w}.
+
+An implementation would \texttt{extract} the current view at each state, and
+user events would be associated with state transitions via the \texttt{Co w} monad.
+
+\section{Examples}
+
+In this section, we will interpret several known comonads in this new context, and
+characterize the user interfaces that they describe. We will see that our approach
+generalizes some known techniques.
+
+\subsection{The Store Comonad}
+
+We have already seen that the \texttt{Store s} comonad provides a useful model of
+user interfaces with a state of type \texttt{s}.
+
+The \texttt{Co (Store s)} monad is isomorphic to the usual \texttt{State s} monad,
+providing full read/write access to the current state. In this
+sense, the \texttt{Store s} comonad is a very unrestrictive model.
+
+As an example, we can rewrite our \texttt{move} function from the previous section
+in terms of \texttt{Co (Store s)}:
+
+\begin{verbatim}
+moveT :: s -> Co (Store s) ()
+moveT s = Co (\w -> view w s ())
+\end{verbatim}
+
+\subsection{Moore Machines}
+
+Moore machines form a comonad:
+
+\begin{verbatim}
+data Moore i a = Moore a (i -> Moore i a)
+\end{verbatim}
+
+Transitions are restricted --- in order to change state, the user
+must provide an input of type \texttt{i}.
+
+This approach is similar to the Elm architecture \citep{elm}.
+
+\subsection{The Cofree Comonad}
+
+Moore machines are a special case of a \textit{cofree comonad}:
+
+\begin{verbatim}
+data Cofree f a = Cofree a (f (Cofree f a))
+\end{verbatim}
+
+Here, transitions can be precisely described by the choice of some functor \texttt{f}.
+It is possible to allow transitions limited read/write access to the current
+state.
+
+In fact, under certain conditions on \texttt{f}, the \texttt{Co (Cofree f)}
+monad is isomorphic to a free monad which is determined by \texttt{f}.
+
+This approach is reminiscent of the approach taken in the Halogen user interface
+library \citep{halogen}.
+
+\section{Composing Specifications}
+
+In this section, we will work in the other direction, looking for comonads which
+correspond to common patterns of composition in user interfaces.
+
+\subsection{Sums}
+
+Given two user interfaces, a common pattern is to display one or the other
+at a time, and to allow the user to switch between the two.
+
+To achieve this, we need to store all future states of both user interfaces, and an
+additional bit of information to indicate which user interface is currently visible.
+This data is packaged in the following data type, which we observe to be a \texttt{Comonad}:
+
+\begin{verbatim}
+data Sum f g a = Sum Bool (f a) (g a)
+\end{verbatim}
+
+\newtheorem{theorem}{Theorem}
+\begin{theorem}
+The \texttt{Sum} of two comonads is itself a comonad.
+\end{theorem}
+
+\begin{proof}
+See \citet{freeman2}.
+\end{proof}
+
+\subsection{Day Convolution}
+
+Another common pattern is to display two user interfaces side-by-side, with their
+states evolving independently.
+
+A comonad to specify such an interface would again need to store all future states of
+both components, and we would also need a function to render any two current states.
+This data is captured by the \textit{Day convolution} \citep{day} of the two functors,
+expressed here as an \textit{existential data type}:
+
+\begin{verbatim}
+data Day f g a =
+  forall x y. Day (x -> y -> a) (f x) (g y)
+\end{verbatim}
+
+The following result becomes necessary:
+
+\begin{theorem}
+The Day convolution of two comonads is itself a comonad.
+\end{theorem}
+
+\begin{proof}
+See \citet{freeman1}.
+\end{proof}
+
+The \texttt{Co (Day f g)} monad for a Day convolution of comonads is difficult to
+describe in general, but there exist natural transformations from \texttt{Co f}
+and \texttt{Co g} to \texttt{Co (Day f g)} which embed transitions
+for the individual components as transitions for the composition.
+
+\subsection{Discussion}
+
+Here, we started with existing, common user interface patterns and discovered
+new comonads. What other idioms lead to useful \texttt{Comonad} instances?
+
+The Day convolution gives the category of comonads the structure of a
+\textit{symmetric monoidal category}. Can this be useful for studying user interfaces?
+
+\section{Conclusion}
+
+Comonads provide a way to generalize several approaches to the specification of
+user interfaces, and compositions of comonads correspond to compositions
+of those specifications.
+This generalization suggests a principled approach to the design and
+implementation of user interfaces, in which the specifications themselves become the objects
+of study.
+
+\acks
+
+Many thanks to Edward Kmett and Jeff Polakow for providing useful feedback, and to
+Arthur Xavier, for testing the ideas presented here.
+
+\bibliographystyle{abbrvnat}
+
+\begin{thebibliography}{10}
+\softraggedright
+
+\bibitem[Czaplicki(2013)]{elm}
+E. Czaplicki, \emph{The Elm Architecture}, 2013
+\newblock \url{guide.elm-lang.org/architecture}.
+
+\bibitem[Day(1970)Day, Brian J.]{day}
+Day, Brian J.
+\newblock \emph{On closed categories of functors}, 1970
+\newblock Reports of the Midwest Category Seminar IV, Springer Berlin Heidelberg, 1--38.
+
+\bibitem[De Goes et~al.(2015)De Goes, Burgess]{halogen}
+J. De Goes, G. Burgess, et al.,
+\newblock \texttt{purescript-halogen}, 2015
+\newblock \url{github.com/slamdata/purescript-halogen}.
+
+\bibitem[Freeman(2016)Freeman]{freeman1}
+Freeman, P., \emph{Comonads and Day Convolution}, 2016
+\newblock \url{blog.functorial.com/posts/2016-08-08-Comonad-And-Day-Convolution.html}.
+
+\bibitem[Freeman(2017)Freeman]{freeman2}
+Freeman, P., \emph{Comonads for Optionality}, 2017
+\newblock \url{blog.functorial.com/posts/2017-10-28-Comonads-For-Optionality.html}.
+
+\bibitem[Kmett(2011)]{kmett}
+E. Kmett, \emph{Monads from Comonads}, 2011
+\newblock \url{comonad.com/reader/2011/monads-from-comonads}.
+
+\end{thebibliography}
+\end{document}
