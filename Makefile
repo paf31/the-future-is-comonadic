@@ -1,2 +1,2 @@
 all:
-		pdflatex -output-directory=output main.tex
+		pdflatex -output-directory=docs main.tex
