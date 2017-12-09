@@ -86,8 +86,10 @@ newtype Co w a = Co
 
 instance Comonad w => Monad (Co w)
 
-select :: Co w a -> w (a -> r) -> w r
-select co w = runCo co (duplicate w)
+select
+  :: Comonad w => Co w (a -> b) -> w a -> w b
+select co w = runCo co (extend dist w) where
+  dist fs f = fmap (f $) fs
 \end{verbatim}
 \caption{The \texttt{Co w} monad for a \texttt{Comonad w} \citep{kmett}}
 \label{fig-transition}
